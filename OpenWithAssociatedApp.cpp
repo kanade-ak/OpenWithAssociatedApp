@@ -3,6 +3,7 @@
 #include <commdlg.h>
 #include <objbase.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <shobjidl.h>
 
 #if defined(_MSC_VER)
@@ -1263,6 +1264,38 @@ void open_with_associated_app(EDIT_SECTION* edit) {
     }
 }
 
+bool open_explorer_with_selection(const std::wstring& path) {
+    PIDLIST_ABSOLUTE pidl = nullptr;
+    SFGAOF attributes = 0;
+    if (SUCCEEDED(SHParseDisplayName(path.c_str(), nullptr, &pidl, 0, &attributes)) && pidl) {
+        const HRESULT hr = SHOpenFolderAndSelectItems(pidl, 0, nullptr, 0);
+        CoTaskMemFree(pidl);
+        if (SUCCEEDED(hr)) return true;
+    }
+
+    const auto parameters = L"/select," + quote_argument(path);
+    const auto result = ShellExecuteW(nullptr, L"open", L"explorer.exe", parameters.c_str(), nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(result) > 32;
+}
+
+void open_in_explorer(EDIT_SECTION* edit) {
+    HWND owner = g_edit_handle ? g_edit_handle->get_host_app_window() : nullptr;
+
+    const auto material_path = get_material_path(edit, owner);
+    if (material_path.empty()) return;
+
+    if (!file_exists(material_path)) {
+        show_message(owner, L"参照元ファイルが見つかりませんでした。\n\n" + material_path, MB_ICONWARNING);
+        return;
+    }
+
+    ComScope com_scope;
+    if (!open_explorer_with_selection(material_path)) {
+        log_error(L"Failed to open Explorer: " + material_path);
+        show_message(owner, L"エクスプローラーの起動に失敗しました。\n\n" + material_path, MB_ICONERROR);
+    }
+}
+
 void run_app_with_edit(int index, EDIT_SECTION* edit) {
     HWND owner = g_edit_handle ? g_edit_handle->get_host_app_window() : nullptr;
     if (index < 0 || index >= static_cast<int>(g_registered_run_apps.size())) return;
@@ -1351,6 +1384,8 @@ extern "C" __declspec(dllexport) void RegisterPlugin(HOST_APP_TABLE* host) {
             reinterpret_cast<void*>(static_cast<INT_PTR>(i)),
             run_app_menu_proc);
     }
+
+    host->register_object_menu(L"エクスプローラーを開く", open_in_explorer);
 
     host->register_config_menu(L"拡張子設定", show_config_dialog);
     host->register_config_menu(L"アプリ実行設定", show_run_apps_dialog);
